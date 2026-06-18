@@ -274,17 +274,26 @@ function hitBlock(bx, by) {
   let b = getBlock(bx, by);
   if (b === COL.QUESTION || b === COL.COIN_BLOCK) {
     setBlock(bx, by, COL.USED);
-    coins++; score += 200;
-    sfxCoin();
-    floatingTexts.push({ x: bx * TILE + 8, y: by * TILE - 10, text: '200', timer: 40, vy: -1.5 });
-    spawnCoinParticle(bx * TILE + TILE / 2, by * TILE);
-    if (coins % 10 === 0) { lives++; floatingTexts.push({ x: bx * TILE, y: by * TILE - 30, text: '1UP', timer: 60, vy: -1 }); }
+    if (Math.random() < 0.25) {
+      entities.push({ type: 'mushroom', x: bx * TILE + 2, y: by * TILE - TILE, vx: 2, vy: 0, w: 28, h: 28, alive: true });
+      sfxPowerup();
+    } else {
+      coins++; score += 200;
+      sfxCoin();
+      floatingTexts.push({ x: bx * TILE + 8, y: by * TILE - 10, text: '200', timer: 40, vy: -1.5 });
+      spawnCoinParticle(bx * TILE + TILE / 2, by * TILE);
+      if (coins % 10 === 0) { lives++; floatingTexts.push({ x: bx * TILE, y: by * TILE - 30, text: '1UP', timer: 60, vy: -1 }); }
+    }
   } else if (b === COL.BRICK) {
-    setBlock(bx, by, COL.AIR);
-    score += 50;
-    sfxBreak();
-    for (let i = 0; i < 4; i++) {
-      particles.push({ x: bx * TILE + (i % 2) * 16, y: by * TILE + Math.floor(i / 2) * 16, vx: (i % 2 === 0 ? -2 : 2) + Math.random(), vy: -4 - Math.random() * 3, size: 8, color: '#c84', life: 50, type: 'debris' });
+    if (player.big) {
+      setBlock(bx, by, COL.AIR);
+      score += 50;
+      sfxBreak();
+      for (let i = 0; i < 4; i++) {
+        particles.push({ x: bx * TILE + (i % 2) * 16, y: by * TILE + Math.floor(i / 2) * 16, vx: (i % 2 === 0 ? -2 : 2) + Math.random(), vy: -4 - Math.random() * 3, size: 8, color: '#c84', life: 50, type: 'debris' });
+      }
+    } else {
+      sfxBreak();
     }
   }
 }
@@ -407,7 +416,13 @@ function update() {
 
   for (let e of entities) {
     if (!e.alive) continue;
-    if (e.stomped > 0) { e.stomped--; continue; }
+    if (e.stomped > 0) {
+      e.stomped--;
+      if (e.stomped === 0 && e.shellMode) {
+        e.vx = (Math.random() > 0.5 ? 1 : -1);
+      }
+      continue;
+    }
     e.vy += GRAVITY;
     e.x += e.vx;
     e.y += e.vy;
@@ -442,17 +457,70 @@ function update() {
 
     if (e.x < -50 || e.x > MAP_W * TILE + 50) e.alive = false;
 
-    if (e.alive && e.stomped === 0) {
+    // Shell-enemy collision
+    if (e.type === 'koopa' && e.shellMode && Math.abs(e.vx) > 0) {
+      for (let other of entities) {
+        if (other === e || !other.alive || other.stomped > 0) continue;
+        if (other.type === 'mushroom') continue;
+        let shellBox = { x: e.x, y: e.y, w: e.w, h: e.h };
+        let otherBox = { x: other.x, y: other.y, w: other.w, h: other.h };
+        if (rectOverlap(shellBox, otherBox)) {
+          other.alive = false;
+          score += 200;
+          floatingTexts.push({ x: other.x, y: other.y - 10, text: '200', timer: 30, vy: -1.5 });
+        }
+      }
+    }
+
+    // Mushroom-player collision
+    if (e.type === 'mushroom' && e.alive) {
       let pBox = { x: player.x - player.w / 2, y: player.y, w: player.w, h: player.h };
       let eBox = { x: e.x, y: e.y, w: e.w, h: e.h };
       if (rectOverlap(pBox, eBox)) {
-        if (player.vy > 0 && player.y + player.h - 4 < e.y + e.h / 2) {
-          e.stomped = 20;
-          sfxStomp();
-          e.h = 14;
-          player.vy = -7;
-          score += 100;
-          floatingTexts.push({ x: e.x, y: e.y - 10, text: '100', timer: 30, vy: -1.5 });
+        e.alive = false;
+        if (!player.big) {
+          player.big = true;
+          player.y -= 18;
+          player.h = 48;
+        }
+        score += 1000;
+        sfxPowerup();
+        floatingTexts.push({ x: e.x, y: e.y - 10, text: '1000', timer: 40, vy: -1.5 });
+      }
+    }
+
+    if (e.alive && e.stomped === 0 && e.type !== 'mushroom') {
+      let pBox = { x: player.x - player.w / 2, y: player.y, w: player.w, h: player.h };
+      let eBox = { x: e.x, y: e.y, w: e.w, h: e.h };
+      if (rectOverlap(pBox, eBox)) {
+        if (player.vy > 0 && player.y + player.h - 8 < e.y + e.h / 2) {
+          if (e.type === 'goomba') {
+            e.stomped = 20;
+            e.alive = false;
+            sfxStomp();
+            e.h = 14;
+            player.vy = -7;
+            score += 100;
+            floatingTexts.push({ x: e.x, y: e.y - 10, text: '100', timer: 30, vy: -1.5 });
+          } else if (e.type === 'koopa') {
+            if (e.shellMode) {
+              e.stomped = 15;
+              e.vx = (player.x < e.x + e.w / 2) ? 4 : -4;
+              sfxStomp();
+              player.vy = -7;
+              score += 200;
+              floatingTexts.push({ x: e.x, y: e.y - 10, text: '200', timer: 30, vy: -1.5 });
+            } else {
+              e.shellMode = true;
+              e.stomped = 40;
+              e.vx = 0;
+              e.h = 16;
+              sfxStomp();
+              player.vy = -7;
+              score += 100;
+              floatingTexts.push({ x: e.x, y: e.y - 10, text: '100', timer: 30, vy: -1.5 });
+            }
+          }
         } else if (player.invincible === 0) {
           killPlayer();
         }
@@ -558,16 +626,22 @@ function resolveCollisionY() {
 
 function killPlayer() {
   if (player.invincible > 0 || player.dead) return;
-  sfxDeath();
-  player.dead = true;
-  player.deadTimer = 60;
-  // If falling off screen, don't bounce up
-  if (player.y > H) {
-    player.vy = 0;
+  if (player.big) {
+    player.big = false;
+    player.h = 30;
+    player.invincible = 120;
+    sfxStomp();
   } else {
-    player.vy = -8;
+    sfxDeath();
+    player.dead = true;
+    player.deadTimer = 60;
+    if (player.y > H) {
+      player.vy = 0;
+    } else {
+      player.vy = -8;
+    }
+    player.vx = 0;
   }
-  player.vx = 0;
 }
 
 function drawTile(bx, by, type) {
@@ -684,17 +758,17 @@ function drawTile(bx, by, type) {
       }
       break;
     case COL.FLAG_POLE:
-      ctx.fillStyle = '#0a0';
+      ctx.fillStyle = '#e00';
       ctx.fillRect(x + TILE / 2 - 2, y, 4, TILE);
       break;
     case COL.FLAG_TOP:
       ctx.fillStyle = '#888';
       ctx.fillRect(x + TILE / 2 - 3, y, 6, TILE);
-      ctx.fillStyle = '#0a0';
+      ctx.fillStyle = '#e00';
       // Draw flag cloth sliding down
       let flagDrawY = (flagSlideY > 0) ? flagSlideY - by * TILE : y + 4;
       if (flagDrawY >= 0 && flagDrawY < TILE) {
-        ctx.fillStyle = '#0a0';
+        ctx.fillStyle = '#e00';
         ctx.fillRect(x + TILE / 2 + 3, flagDrawY, 16, 12);
       }
       break;
@@ -797,6 +871,17 @@ function drawEntity(e) {
       }
       return;
     }
+    if (e.shellMode) {
+      if (imgsReady && IMG.k_shell0 && IMG.k_shell0.complete) {
+        ctx.drawImage(IMG.k_shell0, x, y + e.h - 16, e.w, 16);
+      } else {
+        ctx.fillStyle = '#0a0';
+        ctx.beginPath();
+        ctx.ellipse(x + e.w / 2, y + e.h - 7, e.w / 2, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    }
     if (imgsReady && IMG.k_walk0 && IMG.k_walk0.complete) {
       let walk = Math.floor(e.frame / 12) % 2;
       let sprite = walk ? IMG.k_walk1 : IMG.k_walk0;
@@ -811,6 +896,15 @@ function drawEntity(e) {
       ctx.fillStyle = '#ff0';
       ctx.fillRect(x + 2, y + 6, 24, 12);
     }
+  } else if (e.type === 'mushroom') {
+    ctx.fillStyle = '#e00';
+    ctx.beginPath();
+    ctx.ellipse(x + e.w / 2, y + 6, e.w / 2, 10, 0, Math.PI, 0);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(x + 4, y + 6, e.w - 8, e.h - 8);
+    ctx.fillStyle = '#fda';
+    ctx.fillRect(x + 6, y + 8, e.w - 12, e.h - 12);
   }
 }
 
@@ -980,11 +1074,11 @@ function draw() {
   }
 
   if (won) {
-    // Draw the green triangle flag rising up the pole
+    // Draw the red triangle flag rising up the pole
     if (flagRiseY > 0) {
       let flagScreenX = 185 * TILE + TILE / 2 - camX;
       ctx.save();
-      ctx.fillStyle = '#0a0';
+      ctx.fillStyle = '#e00';
       ctx.beginPath();
       ctx.moveTo(flagScreenX + 4, flagRiseY);
       ctx.lineTo(flagScreenX + 24, flagRiseY + 8);

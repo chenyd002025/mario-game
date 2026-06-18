@@ -1094,8 +1094,8 @@ let touchLeft = false, touchRight = false, touchJump = false;
       canvas.style.top = '50%';
       canvas.style.transform = 'translate(-50%, -50%)';
     }
-    // Position overlay controls
-    positionOverlayControls(isLandscape);
+    // Position overlay controls (only on mobile)
+    if (typeof positionOverlayControls === 'function') positionOverlayControls(isLandscape);
   }
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);

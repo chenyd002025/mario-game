@@ -145,6 +145,8 @@ let gameOver = false, won = false, levelComplete = false, levelTimer = 300;
 let keys = {};
 let animFrame = 0;
 let flagSlideY = -100, flagSlideTarget = -100, flagSliding = false;
+let flagRiseY = -1, flagRiseDone = false, winScreenTimer = 0;
+let timeBonus = 0;
 
 const MAP_W = 210, MAP_H = 15;
 const GROUND_Y = MAP_H - 2;
@@ -252,6 +254,7 @@ function resetLevel() {
   camX = 0; coins = 0; score = 0;
   levelComplete = false; gameOver = false; won = false;
   flagSlideY = -100; flagSlideTarget = -100; flagSliding = false;
+  flagRiseY = -1; flagRiseDone = false; winScreenTimer = 0; timeBonus = 0;
   levelTimer = 300;
   particles = []; floatingTexts = [];
 }
@@ -295,7 +298,40 @@ function rectOverlap(a, b) {
 }
 
 function update() {
-  if (gameOver || won) return;
+  if (gameOver) return;
+
+  // Handle flag rise animation and win screen timer
+  if (won) {
+    // Animate player sliding down the pole
+    player.vy += GRAVITY;
+    player.y += player.vy;
+    if (player.y >= (GROUND_Y - 1) * TILE - player.h) {
+      player.y = (GROUND_Y - 1) * TILE - player.h;
+      player.vy = 0;
+      player.onGround = true;
+    }
+
+    // Animate flagRiseY rising from bottom to top
+    if (!flagRiseDone && flagRiseY > 2 * TILE) {
+      flagRiseY -= 3;
+      if (flagRiseY <= 2 * TILE) {
+        flagRiseY = 2 * TILE;
+        flagRiseDone = true;
+      }
+    }
+
+    // Count up win screen timer after flag animation done
+    if (flagRiseDone) {
+      winScreenTimer++;
+    }
+
+    // Still animate existing flag slide
+    if (flagSliding && flagSlideY < flagSlideTarget) {
+      flagSlideY += 3;
+      if (flagSlideY >= flagSlideTarget) { flagSlideY = flagSlideTarget; flagSliding = false; }
+    }
+    return;
+  }
 
   animFrame++;
   levelTimer -= 1 / 60;
@@ -449,7 +485,11 @@ function update() {
       flagSliding = true;
       stopBGM(); sfxClear();
       won = true;
-      score += Math.floor(levelTimer) * 50;
+      timeBonus = Math.floor(levelTimer) * 50;
+      score += timeBonus;
+      flagRiseY = (GROUND_Y - 1) * TILE;
+      flagRiseDone = false;
+      winScreenTimer = 0;
     }
   }
 
@@ -940,18 +980,73 @@ function draw() {
   }
 
   if (won) {
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
-    ctx.fillRect(0, 0, W, H);
-    ctx.font = 'bold 36px monospace';
-    ctx.fillStyle = '#ff0';
-    ctx.textAlign = 'center';
-    ctx.fillText('COURSE CLEAR!', W / 2, H / 2 - 20);
-    ctx.font = '20px monospace';
-    ctx.fillStyle = '#fff';
-    ctx.fillText('Score: ' + score, W / 2, H / 2 + 15);
-    ctx.font = '16px monospace';
-    ctx.fillStyle = '#aaa';
-    ctx.fillText(isMobile ? '👆 点击屏幕重新开始' : '按 R 重新开始', W / 2, H / 2 + 45);
+    // Draw the green triangle flag rising up the pole
+    if (flagRiseY > 0) {
+      let flagScreenX = 185 * TILE + TILE / 2 - camX;
+      ctx.save();
+      ctx.fillStyle = '#0a0';
+      ctx.beginPath();
+      ctx.moveTo(flagScreenX + 4, flagRiseY);
+      ctx.lineTo(flagScreenX + 24, flagRiseY + 8);
+      ctx.lineTo(flagScreenX + 4, flagRiseY + 16);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Show win overlay only after flag animation and timer
+    if (winScreenTimer > 60) {
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0, 0, W, H);
+
+      ctx.save();
+      ctx.textAlign = 'center';
+
+      // Title: COURSE CLEAR!
+      ctx.font = 'bold 42px monospace';
+      ctx.fillStyle = '#000';
+      ctx.fillText('🏆 COURSE CLEAR!', W / 2 + 3, H / 2 - 73);
+      ctx.fillStyle = '#FFD700';
+      ctx.fillText('🏆 COURSE CLEAR!', W / 2, H / 2 - 76);
+
+      // Score
+      ctx.font = '22px monospace';
+      ctx.fillStyle = '#fff';
+      ctx.fillText('Score: ' + score, W / 2, H / 2 - 25);
+
+      // Coins
+      ctx.fillText('Coins: ' + coins, W / 2, H / 2 + 5);
+
+      // Time Bonus
+      ctx.fillStyle = '#FFD700';
+      ctx.fillText('Time Bonus: +' + timeBonus, W / 2, H / 2 + 35);
+
+      // Blinking restart text
+      let blinkAlpha = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 500));
+      ctx.globalAlpha = blinkAlpha;
+      ctx.font = 'bold 20px monospace';
+      ctx.fillStyle = '#fff';
+      if (isMobile) {
+        ctx.fillText('👆 再来一局?', W / 2, H / 2 + 75);
+      } else {
+        ctx.fillText('Press R to Play Again', W / 2, H / 2 + 75);
+      }
+      ctx.globalAlpha = 1;
+
+      // Red "再来一局" button for mobile
+      if (isMobile) {
+        let btnX = W / 2 - 70, btnY = H / 2 + 95, btnW = 140, btnH = 42;
+        ctx.fillStyle = '#E4211A';
+        ctx.beginPath();
+        ctx.roundRect(btnX, btnY, btnW, btnH, 10);
+        ctx.fill();
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 20px monospace';
+        ctx.fillText('再来一局', W / 2, btnY + btnH / 2);
+      }
+
+      ctx.restore();
+    }
   }
 
   drawTouchControls();
@@ -965,7 +1060,7 @@ document.addEventListener('keydown', e => {
       init();
       startBGM();
     }
-  } else if (gameOver || won) {
+  } else if (gameOver || (won && winScreenTimer > 60)) {
     if (e.key === 'r' || e.key === 'R') { lives = 3; resetLevel(); startBGM(); }
   }
   e.preventDefault();
@@ -1059,7 +1154,7 @@ document.addEventListener('touchstart', function(e) {
       titleScreen = false; init(); startBGM();
       e.preventDefault(); return;
     }
-    if (gameOver || won) {
+    if (gameOver || (won && winScreenTimer > 60)) {
       lives = 3; resetLevel(); startBGM();
       e.preventDefault(); return;
     }
@@ -1111,64 +1206,119 @@ function loop() {
 }
 
 function drawTitle() {
-  // Background image with dark overlay
+  // === Background ===
   if (imgsReady && IMG.bg && IMG.bg.complete) {
     ctx.drawImage(IMG.bg, 0, 0, W, H);
   } else {
+    // Gradient sky
     let grad = ctx.createLinearGradient(0, 0, 0, H);
-    grad.addColorStop(0, '#1a1a2e');
-    grad.addColorStop(1, '#16213e');
+    grad.addColorStop(0, '#5C94FC');
+    grad.addColorStop(1, '#87CEEB');
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, W, H);
   }
-  // Dark overlay
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fillRect(0, 0, W, H);
 
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // Title image
-  if (imgsReady && IMG.title && IMG.title.complete) {
-    let tw = 360, th = 100;
-    let tx = (W - tw) / 2, ty = 60;
-    ctx.drawImage(IMG.title, tx, ty, tw, th);
-  } else {
-    ctx.font = 'bold 48px "Press Start 2P", monospace';
-    ctx.fillStyle = '#000';
-    ctx.fillText("SUPER MARIO", W / 2 + 3, 93);
-    ctx.fillStyle = '#E4211A';
-    ctx.fillText("SUPER MARIO", W / 2, 90);
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 2;
-    ctx.strokeText("SUPER MARIO", W / 2, 90);
+  // === Decorative clouds ===
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  function drawCloud(cx, cy, scale) {
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 40 * scale, 20 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx - 25 * scale, cy + 5 * scale, 25 * scale, 15 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx + 25 * scale, cy + 5 * scale, 25 * scale, 15 * scale, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  drawCloud(100, 60, 1);
+  drawCloud(350, 40, 1.2);
+  drawCloud(600, 70, 0.9);
+  drawCloud(750, 50, 0.7);
+
+  // === Green hills ===
+  ctx.fillStyle = '#4CAF50';
+  ctx.beginPath();
+  ctx.ellipse(150, H - 50, 180, 80, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#66BB6A';
+  ctx.beginPath();
+  ctx.ellipse(500, H - 40, 140, 60, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#4CAF50';
+  ctx.beginPath();
+  ctx.ellipse(720, H - 50, 120, 70, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // === Ground strip ===
+  ctx.fillStyle = '#C8860C';
+  ctx.fillRect(0, H - 50, W, 50);
+  ctx.fillStyle = '#8B5E00';
+  ctx.fillRect(0, H - 50, W, 6);
+
+  // === Decorative coins on both sides ===
+  let coinBounce = Math.sin(Date.now() / 400) * 3;
+  ctx.fillStyle = '#FFD700';
+  ctx.strokeStyle = '#B8860B';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < 3; i++) {
+    let cx = 50 + i * 30, cy = H - 70 + coinBounce + i * 5;
+    ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+  }
+  for (let i = 0; i < 3; i++) {
+    let cx = W - 50 - i * 30, cy = H - 70 + coinBounce + i * 5;
+    ctx.beginPath(); ctx.arc(cx, cy, 10, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
   }
 
-  // Mario portrait with bounce
+  // === Title ===
+  if (imgsReady && IMG.title && IMG.title.complete) {
+    let tw = 380, th = 110;
+    let tx = (W - tw) / 2, ty = 50;
+    ctx.drawImage(IMG.title, tx, ty, tw, th);
+  } else {
+    ctx.font = 'bold 52px monospace';
+    ctx.fillStyle = '#000';
+    ctx.fillText('SUPER MARIO', W / 2 + 4, 84);
+    ctx.fillStyle = '#E4211A';
+    ctx.fillText('SUPER MARIO', W / 2, 80);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.strokeText('SUPER MARIO', W / 2, 80);
+  }
+
+  // === Mario portrait with bounce ===
   if (imgsReady && IMG.m_portrait && IMG.m_portrait.complete) {
     let bounce = Math.sin(Date.now() / 300) * 10;
     let pw = 100, ph = 100;
     ctx.drawImage(IMG.m_portrait, W / 2 - pw / 2, 190 + bounce, pw, ph);
   }
 
-  // Blinking start text
+  // === Character name ===
+  ctx.font = 'bold 18px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.fillText('MARIO', W / 2, 310);
+
+  // === Blinking start text ===
   let alpha = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 500));
   ctx.globalAlpha = alpha;
   ctx.font = 'bold 22px monospace';
   ctx.fillStyle = '#fff';
-  ctx.textAlign = 'center';
   if (isMobile) {
-    ctx.fillText('👆 点击屏幕开始', W / 2, 340);
+    ctx.fillText('👆 点击屏幕开始', W / 2, 350);
   } else {
-    ctx.fillText('PRESS SPACE TO START', W / 2, 340);
+    ctx.fillText('PRESS SPACE TO START', W / 2, 350);
   }
   ctx.globalAlpha = 1;
 
-  // Credit text
+  // === Credit ===
   ctx.font = '14px monospace';
-  ctx.fillStyle = 'rgba(255,255,255,0.5)';
-  ctx.fillText('AI三剑客 · 黑豹版', W / 2, H - 40);
+  ctx.fillStyle = 'rgba(255,255,255,0.6)';
+  ctx.fillText('AI三剑客 · 黑豹版', W / 2, H - 20);
 
   ctx.restore();
 }

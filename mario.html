@@ -14,6 +14,22 @@ canvas { display: block; image-rendering: pixelated; max-width: 100vw; max-heigh
 <script>
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
+// roundRect polyfill for older browsers
+if (!ctx.roundRect) {
+  CanvasRenderingContext2D.prototype.roundRect = function(x, y, w, h, r) {
+    if (typeof r === 'number') r = [r, r, r, r];
+    this.moveTo(x + r[0], y);
+    this.lineTo(x + w - r[1], y);
+    this.quadraticCurveTo(x + w, y, x + w, y + r[1]);
+    this.lineTo(x + w, y + h - r[2]);
+    this.quadraticCurveTo(x + w, y + h, x + w - r[2], y + h);
+    this.lineTo(x + r[3], y + h);
+    this.quadraticCurveTo(x, y + h, x, y + h - r[3]);
+    this.lineTo(x, y + r[0]);
+    this.quadraticCurveTo(x, y, x + r[0], y);
+    this.closePath();
+  };
+}
 canvas.width = 800;
 canvas.height = 480;
 const W = canvas.width, H = canvas.height;
@@ -937,6 +953,8 @@ function draw() {
     ctx.fillStyle = '#aaa';
     ctx.fillText(isMobile ? '👆 点击屏幕重新开始' : '按 R 重新开始', W / 2, H / 2 + 45);
   }
+
+  drawTouchControls();
 }
 
 document.addEventListener('keydown', e => {
@@ -954,88 +972,129 @@ document.addEventListener('keydown', e => {
 });
 document.addEventListener('keyup', e => { keys[e.key] = false; });
 
-// ===== Mobile Touch Controls =====
-let touchControls = { left: false, right: false, jump: false };
-let isMobile = /Android|iPhone|iPad|iPod|webOS/i.test(navigator.userAgent) || ('ontouchstart' in window && window.innerWidth < 1024);
+// ===== Mobile Touch Controls (Canvas-drawn) =====
+let isMobile = ('ontouchstart' in window) || /Android|iPhone|iPad|iPod|webOS/i.test(navigator.userAgent);
+let touchLeft = false, touchRight = false, touchJump = false;
 
-function setupTouchControls() {
-  if (!isMobile) return;
-
-  // Scale canvas to fit screen
+// Resize canvas to fill screen
+(function setupResize() {
   function resizeCanvas() {
     const ratio = W / H;
     let sw = window.innerWidth, sh = window.innerHeight;
-    let isLandscape = sw > sh;
-
-    if (isLandscape) {
-      // Landscape: fill entire screen, overlay controls
-      canvas.style.width = sw + 'px';
+    if (sw / sh > ratio) {
       canvas.style.height = sh + 'px';
+      canvas.style.width = (sh * ratio) + 'px';
     } else {
-      // Portrait: reserve space for controls at bottom
-      let controlH = 120;
-      let availH = sh - controlH;
-      if (sw / availH > ratio) {
-        canvas.style.height = availH + 'px';
-        canvas.style.width = (availH * ratio) + 'px';
-      } else {
-        canvas.style.width = sw + 'px';
-        canvas.style.height = (sw / ratio) + 'px';
-      }
+      canvas.style.width = sw + 'px';
+      canvas.style.height = (sw / ratio) + 'px';
     }
   }
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
+})();
 
-  // Create touch button UI
-  const btnContainer = document.createElement('div');
-  btnContainer.style.cssText = 'position:fixed;bottom:0;left:0;right:0;height:100px;display:flex;justify-content:space-between;align-items:center;padding:0 16px;z-index:999;background:linear-gradient(transparent,rgba(0,0,0,0.4));';
+// Canvas-drawn touch control regions (in canvas coords)
+// D-pad: bottom-left area; Jump: bottom-right circle
+function drawTouchControls() {
+  if (!isMobile) return;
+  if (titleScreen || gameOver || won) return;
 
-  // Left side: D-pad
-  const dpad = document.createElement('div');
-  dpad.style.cssText = 'display:flex;gap:8px;';
+  const dpr = window.devicePixelRatio || 1;
+  // D-pad left button
+  const dpadY = H - 70, dpadLX = 30, dpadRX = 130, btnW = 70, btnH = 50;
 
-  function makeBtn(text, w) {
-    const b = document.createElement('button');
-    b.textContent = text;
-    b.style.cssText = `width:${w}px;height:64px;font-size:24px;border:none;border-radius:14px;background:rgba(255,255,255,0.25);color:#fff;touch-action:none;-webkit-user-select:none;user-select:none;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px);`;
-    return b;
-  }
+  ctx.save();
+  // Left arrow
+  ctx.globalAlpha = touchLeft ? 0.6 : 0.3;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.roundRect(dpadLX, dpadY, btnW, btnH, 10);
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.font = 'bold 22px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('◀', dpadLX + btnW / 2, dpadY + btnH / 2);
 
-  const btnLeft = makeBtn('◀', 70);
-  const btnRight = makeBtn('▶', 70);
+  // Right arrow
+  ctx.globalAlpha = touchRight ? 0.6 : 0.3;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.roundRect(dpadRX, dpadY, btnW, btnH, 10);
+  ctx.fill();
+  ctx.fillStyle = '#000';
+  ctx.fillText('▶', dpadRX + btnW / 2, dpadY + btnH / 2);
 
-  // Right side: Jump
-  const jumpArea = document.createElement('div');
-  const btnJump = makeBtn('跳', 120);
-  btnJump.style.background = 'rgba(255,80,80,0.35)';
+  // Jump button (right side)
+  const jx = W - 70, jy = H - 70, jr = 38;
+  ctx.globalAlpha = touchJump ? 0.6 : 0.3;
+  ctx.fillStyle = '#E4211A';
+  ctx.beginPath();
+  ctx.arc(jx, jy, jr, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('跳', jx, jy);
 
-  // Touch handlers
-  function bindTouch(btn, key) {
-    btn.addEventListener('touchstart', e => { e.preventDefault(); keys[key] = true; btn.style.background = 'rgba(255,255,255,0.5)'; }, { passive: false });
-    btn.addEventListener('touchend', e => { e.preventDefault(); keys[key] = false; btn.style.background = 'rgba(255,255,255,0.2)'; }, { passive: false });
-    btn.addEventListener('touchcancel', e => { keys[key] = false; btn.style.background = 'rgba(255,255,255,0.2)'; });
-  }
-  bindTouch(btnLeft, 'ArrowLeft');
-  bindTouch(btnRight, 'ArrowRight');
-  btnJump.addEventListener('touchstart', e => { e.preventDefault(); keys['ArrowUp'] = true; keys[' '] = true; btnJump.style.background = 'rgba(255,80,80,0.6)'; }, { passive: false });
-  btnJump.addEventListener('touchend', e => { e.preventDefault(); keys['ArrowUp'] = false; keys[' '] = false; btnJump.style.background = 'rgba(255,80,80,0.35)'; }, { passive: false });
-  btnJump.addEventListener('touchcancel', e => { keys['ArrowUp'] = false; keys[' '] = false; btnJump.style.background = 'rgba(255,80,80,0.35)'; });
-
-  dpad.appendChild(btnLeft);
-  dpad.appendChild(btnRight);
-  jumpArea.appendChild(btnJump);
-  btnContainer.appendChild(dpad);
-  btnContainer.appendChild(jumpArea);
-  document.body.appendChild(btnContainer);
-
-  // Title screen: tap canvas to start
-  canvas.addEventListener('touchstart', function onTap(e) {
-    if (titleScreen) { titleScreen = false; init(); startBGM(); }
-    else if (gameOver || won) { lives = 3; resetLevel(); startBGM(); }
-  }, { passive: true });
+  ctx.restore();
 }
-setupTouchControls();
+
+// Convert screen touch to canvas coordinates
+function screenToCanvas(sx, sy) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (sx - rect.left) / rect.width * W,
+    y: (sy - rect.top) / rect.height * H
+  };
+}
+
+function isDpadLeft(cx, cy) { return cx >= 30 && cx <= 100 && cy >= H - 70 && cy <= H - 20; }
+function isDpadRight(cx, cy) { return cx >= 130 && cx <= 200 && cy >= H - 70 && cy <= H - 20; }
+function isJumpBtn(cx, cy) { const dx = cx - (W - 70), dy = cy - (H - 70); return dx * dx + dy * dy <= 38 * 38; }
+
+document.addEventListener('touchstart', function(e) {
+  for (const t of e.changedTouches) {
+    const p = screenToCanvas(t.clientX, t.clientY);
+    if (titleScreen) {
+      titleScreen = false; init(); startBGM();
+      e.preventDefault(); return;
+    }
+    if (gameOver || won) {
+      lives = 3; resetLevel(); startBGM();
+      e.preventDefault(); return;
+    }
+    if (isDpadLeft(p.x, p.y)) { touchLeft = true; keys['ArrowLeft'] = true; }
+    else if (isDpadRight(p.x, p.y)) { touchRight = true; keys['ArrowRight'] = true; }
+    else if (isJumpBtn(p.x, p.y)) { touchJump = true; keys['ArrowUp'] = true; keys[' '] = true; }
+  }
+}, { passive: false });
+
+document.addEventListener('touchmove', function(e) {
+  e.preventDefault();
+}, { passive: false });
+
+document.addEventListener('touchend', function(e) {
+  for (const t of e.changedTouches) {
+    const p = screenToCanvas(t.clientX, t.clientY);
+    // Release all if finger lifts
+    touchLeft = false; touchRight = false; touchJump = false;
+    keys['ArrowLeft'] = false; keys['ArrowRight'] = false;
+    keys['ArrowUp'] = false; keys[' '] = false;
+  }
+  // If other fingers still down, re-check
+  for (const t of e.touches) {
+    const p = screenToCanvas(t.clientX, t.clientY);
+    if (isDpadLeft(p.x, p.y)) { touchLeft = true; keys['ArrowLeft'] = true; }
+    if (isDpadRight(p.x, p.y)) { touchRight = true; keys['ArrowRight'] = true; }
+    if (isJumpBtn(p.x, p.y)) { touchJump = true; keys['ArrowUp'] = true; keys[' '] = true; }
+  }
+}, { passive: false });
+
+document.addEventListener('touchcancel', function(e) {
+  touchLeft = false; touchRight = false; touchJump = false;
+  keys['ArrowLeft'] = false; keys['ArrowRight'] = false;
+  keys['ArrowUp'] = false; keys[' '] = false;
+}, { passive: false });
 
 function loop() {
   try {
@@ -1052,109 +1111,66 @@ function loop() {
 }
 
 function drawTitle() {
-  // Sky gradient background
-  let grad = ctx.createLinearGradient(0, 0, 0, H);
-  grad.addColorStop(0, '#5C94FC');
-  grad.addColorStop(0.6, '#87CEEB');
-  grad.addColorStop(1, '#56A64A');
-  ctx.fillStyle = grad;
+  // Background image with dark overlay
+  if (imgsReady && IMG.bg && IMG.bg.complete) {
+    ctx.drawImage(IMG.bg, 0, 0, W, H);
+  } else {
+    let grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#1a1a2e');
+    grad.addColorStop(1, '#16213e');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+  }
+  // Dark overlay
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
   ctx.fillRect(0, 0, W, H);
 
-  // Hills
-  for (let i = 0; i < 6; i++) {
-    let hx = i * 180 - 50;
-    ctx.fillStyle = '#2D8B2D';
-    ctx.beginPath();
-    ctx.ellipse(hx, H - 30, 120, 65, 0, Math.PI, 0);
-    ctx.fill();
-    ctx.fillStyle = '#3DAB3D';
-    ctx.beginPath();
-    ctx.ellipse(hx, H - 30, 85, 45, 0, Math.PI, 0);
-    ctx.fill();
-  }
-
-  // Ground
-  ctx.fillStyle = '#C84C09';
-  ctx.fillRect(0, H - 40, W, 40);
-  ctx.fillStyle = '#E09050';
-  ctx.fillRect(0, H - 40, W, 6);
-
-  // Clouds
-  for (let i = 0; i < 8; i++) {
-    let cx = 60 + i * 110;
-    let cy = 40 + (i % 3) * 30;
-    ctx.fillStyle = 'rgba(255,255,255,0.85)';
-    ctx.beginPath();
-    ctx.ellipse(cx, cy, 38, 16, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(cx - 22, cy + 7, 24, 13, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(cx + 24, cy + 4, 28, 14, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Title text - "MARIO'S" in red
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
 
-  // Shadow
-  ctx.font = 'bold 52px "Press Start 2P", monospace';
-  ctx.fillStyle = '#000';
-  ctx.fillText("MARIO'S", W / 2 + 3, 103);
-  ctx.fillText("ADVENTURE", W / 2 + 3, 163);
-
-  // Main text
-  ctx.fillStyle = '#E4211A';
-  ctx.fillText("MARIO'S", W / 2, 100);
-  ctx.fillStyle = '#F5C518';
-  ctx.fillText("ADVENTURE", W / 2, 160);
-
-  // Outline effect
-  ctx.strokeStyle = '#000';
-  ctx.lineWidth = 2;
-  ctx.strokeText("MARIO'S", W / 2, 100);
-  ctx.strokeText("ADVENTURE", W / 2, 160);
-
-  ctx.restore();
-
-  // Mario sprite - bounce animation
-  if (imgsReady && IMG.m_portrait && IMG.m_portrait.complete) {
-    let bounce = Math.sin(Date.now() / 300) * 12;
-    ctx.drawImage(IMG.m_portrait, W / 2 - 30, 200 + bounce, 60, 60);
-  } else if (imgsReady && IMG.m_idle0 && IMG.m_idle0.complete) {
-    let bounce = Math.sin(Date.now() / 300) * 12;
-    ctx.drawImage(IMG.m_idle0, W / 2 - 20, 200 + bounce, 40, 50);
+  // Title image
+  if (imgsReady && IMG.title && IMG.title.complete) {
+    let tw = 360, th = 100;
+    let tx = (W - tw) / 2, ty = 60;
+    ctx.drawImage(IMG.title, tx, ty, tw, th);
+  } else {
+    ctx.font = 'bold 48px "Press Start 2P", monospace';
+    ctx.fillStyle = '#000';
+    ctx.fillText("SUPER MARIO", W / 2 + 3, 93);
+    ctx.fillStyle = '#E4211A';
+    ctx.fillText("SUPER MARIO", W / 2, 90);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.strokeText("SUPER MARIO", W / 2, 90);
   }
 
-  // Coin decoration
-  ctx.fillStyle = '#FFD700';
-  ctx.beginPath();
-  ctx.arc(W / 2 + 55, 220, 8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#DAA520';
-  ctx.beginPath();
-  ctx.arc(W / 2 + 55, 220, 4, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#FFD700';
-  ctx.beginPath();
-  ctx.arc(W / 2 - 55, 220, 8, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#DAA520';
-  ctx.beginPath();
-  ctx.arc(W / 2 - 55, 220, 4, 0, Math.PI * 2);
-  ctx.fill();
+  // Mario portrait with bounce
+  if (imgsReady && IMG.m_portrait && IMG.m_portrait.complete) {
+    let bounce = Math.sin(Date.now() / 300) * 10;
+    let pw = 100, ph = 100;
+    ctx.drawImage(IMG.m_portrait, W / 2 - pw / 2, 190 + bounce, pw, ph);
+  }
 
-  // Start prompt
-  let alpha = 0.5 + 0.5 * Math.sin(Date.now() / 400);
+  // Blinking start text
+  let alpha = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 500));
   ctx.globalAlpha = alpha;
-  ctx.font = 'bold 20px monospace';
+  ctx.font = 'bold 22px monospace';
   ctx.fillStyle = '#fff';
   ctx.textAlign = 'center';
-  ctx.fillText(isMobile ? '👆 点击屏幕开始' : 'PRESS SPACE TO START', W / 2, H - 80);
+  if (isMobile) {
+    ctx.fillText('👆 点击屏幕开始', W / 2, 340);
+  } else {
+    ctx.fillText('PRESS SPACE TO START', W / 2, 340);
+  }
   ctx.globalAlpha = 1;
+
+  // Credit text
+  ctx.font = '14px monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  ctx.fillText('AI三剑客 · 黑豹版', W / 2, H - 40);
+
+  ctx.restore();
 }
 
 init();

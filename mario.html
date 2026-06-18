@@ -1076,13 +1076,26 @@ let touchLeft = false, touchRight = false, touchJump = false;
   function resizeCanvas() {
     const ratio = W / H;
     let sw = window.innerWidth, sh = window.innerHeight;
-    if (sw / sh > ratio) {
+    let isLandscape = sw > sh;
+    if (isLandscape) {
+      // Landscape: fit height, leave black bars for controls
       canvas.style.height = sh + 'px';
       canvas.style.width = (sh * ratio) + 'px';
+      canvas.style.position = 'absolute';
+      canvas.style.left = '50%';
+      canvas.style.top = '0';
+      canvas.style.transform = 'translateX(-50%)';
     } else {
+      // Portrait: fit width
       canvas.style.width = sw + 'px';
       canvas.style.height = (sw / ratio) + 'px';
+      canvas.style.position = 'absolute';
+      canvas.style.left = '50%';
+      canvas.style.top = '50%';
+      canvas.style.transform = 'translate(-50%, -50%)';
     }
+    // Position overlay controls
+    positionOverlayControls(isLandscape);
   }
   resizeCanvas();
   window.addEventListener('resize', resizeCanvas);
@@ -1091,47 +1104,7 @@ let touchLeft = false, touchRight = false, touchJump = false;
 // Canvas-drawn touch control regions (in canvas coords)
 // D-pad: bottom-left area; Jump: bottom-right circle
 function drawTouchControls() {
-  if (!isMobile) return;
-  if (titleScreen || gameOver || won) return;
-
-  const dpr = window.devicePixelRatio || 1;
-  // D-pad left button
-  const dpadY = H - 70, dpadLX = 30, dpadRX = 130, btnW = 70, btnH = 50;
-
-  ctx.save();
-  // Left arrow
-  ctx.globalAlpha = touchLeft ? 0.6 : 0.3;
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.roundRect(dpadLX, dpadY, btnW, btnH, 10);
-  ctx.fill();
-  ctx.fillStyle = '#000';
-  ctx.font = 'bold 22px monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('◀', dpadLX + btnW / 2, dpadY + btnH / 2);
-
-  // Right arrow
-  ctx.globalAlpha = touchRight ? 0.6 : 0.3;
-  ctx.fillStyle = '#fff';
-  ctx.beginPath();
-  ctx.roundRect(dpadRX, dpadY, btnW, btnH, 10);
-  ctx.fill();
-  ctx.fillStyle = '#000';
-  ctx.fillText('▶', dpadRX + btnW / 2, dpadY + btnH / 2);
-
-  // Jump button (right side)
-  const jx = W - 70, jy = H - 70, jr = 38;
-  ctx.globalAlpha = touchJump ? 0.6 : 0.3;
-  ctx.fillStyle = '#E4211A';
-  ctx.beginPath();
-  ctx.arc(jx, jy, jr, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = '#fff';
-  ctx.font = 'bold 20px monospace';
-  ctx.fillText('跳', jx, jy);
-
-  ctx.restore();
+  // Touch controls now handled by HTML overlay buttons
 }
 
 // Convert screen touch to canvas coordinates
@@ -1148,19 +1121,14 @@ function isDpadRight(cx, cy) { return cx >= 130 && cx <= 200 && cy >= H - 70 && 
 function isJumpBtn(cx, cy) { const dx = cx - (W - 70), dy = cy - (H - 70); return dx * dx + dy * dy <= 38 * 38; }
 
 document.addEventListener('touchstart', function(e) {
-  for (const t of e.changedTouches) {
-    const p = screenToCanvas(t.clientX, t.clientY);
-    if (titleScreen) {
-      titleScreen = false; init(); startBGM();
-      e.preventDefault(); return;
-    }
-    if (gameOver || (won && winScreenTimer > 60)) {
-      lives = 3; resetLevel(); startBGM();
-      e.preventDefault(); return;
-    }
-    if (isDpadLeft(p.x, p.y)) { touchLeft = true; keys['ArrowLeft'] = true; }
-    else if (isDpadRight(p.x, p.y)) { touchRight = true; keys['ArrowRight'] = true; }
-    else if (isJumpBtn(p.x, p.y)) { touchJump = true; keys['ArrowUp'] = true; keys[' '] = true; }
+  // Only handle title/gameover/win taps on canvas area
+  if (titleScreen) {
+    titleScreen = false; init(); startBGM();
+    e.preventDefault(); return;
+  }
+  if (gameOver || (won && winScreenTimer > 60)) {
+    lives = 3; resetLevel(); startBGM();
+    e.preventDefault(); return;
   }
 }, { passive: false });
 
@@ -1168,28 +1136,7 @@ document.addEventListener('touchmove', function(e) {
   e.preventDefault();
 }, { passive: false });
 
-document.addEventListener('touchend', function(e) {
-  for (const t of e.changedTouches) {
-    const p = screenToCanvas(t.clientX, t.clientY);
-    // Release all if finger lifts
-    touchLeft = false; touchRight = false; touchJump = false;
-    keys['ArrowLeft'] = false; keys['ArrowRight'] = false;
-    keys['ArrowUp'] = false; keys[' '] = false;
-  }
-  // If other fingers still down, re-check
-  for (const t of e.touches) {
-    const p = screenToCanvas(t.clientX, t.clientY);
-    if (isDpadLeft(p.x, p.y)) { touchLeft = true; keys['ArrowLeft'] = true; }
-    if (isDpadRight(p.x, p.y)) { touchRight = true; keys['ArrowRight'] = true; }
-    if (isJumpBtn(p.x, p.y)) { touchJump = true; keys['ArrowUp'] = true; keys[' '] = true; }
-  }
-}, { passive: false });
-
-document.addEventListener('touchcancel', function(e) {
-  touchLeft = false; touchRight = false; touchJump = false;
-  keys['ArrowLeft'] = false; keys['ArrowRight'] = false;
-  keys['ArrowUp'] = false; keys[' '] = false;
-}, { passive: false });
+// Touch controls handled by HTML overlay buttons
 
 function loop() {
   try {
@@ -1325,6 +1272,98 @@ function drawTitle() {
 
 init();
 loop();
+
+// ===== HTML Overlay Touch Controls (for black bar areas) =====
+if (isMobile) {
+  const overlayCSS = 'position:fixed;z-index:999;touch-action:none;-webkit-user-select:none;user-select:none;';
+
+  // Left D-pad
+  const oDpad = document.createElement('div');
+  oDpad.id = 'odpad';
+  oDpad.style.cssText = overlayCSS + 'display:flex;gap:6px;';
+
+  function makeOBtn(text, w) {
+    const b = document.createElement('button');
+    b.textContent = text;
+    b.style.cssText = `width:${w}px;height:60px;font-size:22px;border:none;border-radius:12px;background:rgba(255,255,255,0.2);color:#fff;touch-action:none;`;
+    return b;
+  }
+
+  const oBtnL = makeOBtn('◀', 65);
+  const oBtnR = makeOBtn('▶', 65);
+  oDpad.appendChild(oBtnL);
+  oDpad.appendChild(oBtnR);
+  document.body.appendChild(oDpad);
+
+  // Right jump button
+  const oJump = document.createElement('button');
+  oJump.textContent = '跳';
+  oJump.style.cssText = overlayCSS + 'width:70px;height:70px;font-size:20px;border:none;border-radius:50%;background:rgba(228,33,26,0.3);color:#fff;touch-action:none;';
+  document.body.appendChild(oJump);
+
+  // Fullscreen button
+  const oFS = document.createElement('button');
+  oFS.textContent = '⛶';
+  oFS.style.cssText = overlayCSS + 'top:8px;right:8px;width:40px;height:40px;font-size:20px;border:none;border-radius:8px;background:rgba(255,255,255,0.15);color:#fff;';
+  document.body.appendChild(oFS);
+  oFS.addEventListener('click', function() {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(()=>{});
+    } else {
+      document.exitFullscreen();
+    }
+  });
+
+  // Bind touch
+  function bindO(btn, key) {
+    btn.addEventListener('touchstart', e => { e.preventDefault(); keys[key] = true; btn.style.background = 'rgba(255,255,255,0.5)'; }, {passive:false});
+    btn.addEventListener('touchend', e => { e.preventDefault(); keys[key] = false; btn.style.background = 'rgba(255,255,255,0.2)'; }, {passive:false});
+    btn.addEventListener('touchcancel', e => { keys[key] = false; btn.style.background = 'rgba(255,255,255,0.2)'; });
+  }
+  bindO(oBtnL, 'ArrowLeft');
+  bindO(oBtnR, 'ArrowRight');
+  oJump.addEventListener('touchstart', e => { e.preventDefault(); keys['ArrowUp'] = true; keys[' '] = true; oJump.style.background = 'rgba(228,33,26,0.6)'; }, {passive:false});
+  oJump.addEventListener('touchend', e => { e.preventDefault(); keys['ArrowUp'] = false; keys[' '] = false; oJump.style.background = 'rgba(228,33,26,0.3)'; }, {passive:false});
+  oJump.addEventListener('touchcancel', e => { keys['ArrowUp'] = false; keys[' '] = false; oJump.style.background = 'rgba(228,33,26,0.3)'; });
+
+  // Position controls based on orientation
+  function positionOverlayControls(isLandscape) {
+    if (isLandscape) {
+      // Landscape: controls in black bar areas
+      const canvasRect = canvas.getBoundingClientRect();
+      const barLeft = canvasRect.left;
+      const barRight = window.innerWidth - canvasRect.right;
+
+      oDpad.style.left = Math.max(8, barLeft / 2 - 70) + 'px';
+      oDpad.style.bottom = '20px';
+      oDpad.style.right = 'auto';
+      oDpad.style.top = 'auto';
+
+      oJump.style.right = Math.max(8, barRight / 2 - 35) + 'px';
+      oJump.style.left = 'auto';
+      oJump.style.bottom = '20px';
+      oJump.style.top = 'auto';
+
+      oFS.style.display = 'block';
+    } else {
+      // Portrait: controls at bottom
+      oDpad.style.left = '12px';
+      oDpad.style.bottom = '12px';
+      oDpad.style.right = 'auto';
+      oDpad.style.top = 'auto';
+
+      oJump.style.right = '12px';
+      oJump.style.left = 'auto';
+      oJump.style.bottom = '12px';
+      oJump.style.top = 'auto';
+
+      oFS.style.display = 'block';
+    }
+  }
+} else {
+  // Desktop: no overlay controls needed
+  function positionOverlayControls() {}
+}
 </script>
 </body>
 </html>

@@ -128,6 +128,7 @@ let camX = 0, coins = 0, score = 0, lives = 3;
 let gameOver = false, won = false, levelComplete = false, levelTimer = 300;
 let keys = {};
 let animFrame = 0;
+let flagSlideY = -100, flagSlideTarget = -100, flagSliding = false;
 
 const MAP_W = 210, MAP_H = 15;
 const GROUND_Y = MAP_H - 2;
@@ -234,6 +235,7 @@ function resetLevel() {
   initPlayer();
   camX = 0; coins = 0; score = 0;
   levelComplete = false; gameOver = false; won = false;
+  flagSlideY = -100; flagSlideTarget = -100; flagSliding = false;
   levelTimer = 300;
   particles = []; floatingTexts = [];
 }
@@ -287,8 +289,9 @@ function update() {
   if (player.y > H + 50) {
     lives--;
     sfxDeath();
-    if (lives <= 0) { gameOver = true; return; }
+    if (lives <= 0) { gameOver = true; stopBGM(); sfxGameOver(); return; }
     initPlayer(); camX = 0;
+    startBGM();
     return;
   }
 
@@ -299,9 +302,9 @@ function update() {
     player.y += player.vy;
     if (player.deadTimer <= 0) {
       lives--;
-      if (lives <= 0) { gameOver = true; return; }
-      stopBGM(); sfxGameOver();
+      if (lives <= 0) { gameOver = true; stopBGM(); sfxGameOver(); return; }
       initPlayer(); camX = 0;
+      startBGM();
     }
     return;
   }
@@ -416,16 +419,28 @@ function update() {
   for (let f of floatingTexts) { f.y += f.vy; f.timer--; }
   floatingTexts = floatingTexts.filter(f => f.timer > 0);
 
-  // flag collision -只要走到旗杆区域就通关
-  let flagTileX = 185;
-  let playerTileX = Math.floor(player.x / TILE);
-  if (playerTileX >= flagTileX - 2) {
+  // flag collision - 碰到旗杆才算通关
+  let flagPoleX = 185 * TILE + TILE / 2;
+  let flagPoleLeft = flagPoleX - 6;
+  let flagPoleRight = flagPoleX + 6;
+  let playerLeft = player.x - player.w / 2;
+  let playerRight = player.x + player.w / 2;
+  if (playerRight > flagPoleLeft && playerLeft < flagPoleRight) {
     if (!levelComplete && !won) {
       levelComplete = true;
+      flagSlideY = 3 * TILE;
+      flagSlideTarget = (GROUND_Y - 1) * TILE;
+      flagSliding = true;
       stopBGM(); sfxClear();
       won = true;
       score += Math.floor(levelTimer) * 50;
     }
+  }
+
+  // animate flag sliding down
+  if (flagSliding && flagSlideY < flagSlideTarget) {
+    flagSlideY += 3;
+    if (flagSlideY >= flagSlideTarget) { flagSlideY = flagSlideTarget; flagSliding = false; }
   }
 }
 
@@ -620,7 +635,12 @@ function drawTile(bx, by, type) {
       ctx.fillStyle = '#888';
       ctx.fillRect(x + TILE / 2 - 3, y, 6, TILE);
       ctx.fillStyle = '#0a0';
-      ctx.fillRect(x + TILE / 2 + 3, y + 4, 16, 12);
+      // Draw flag cloth sliding down
+      let flagDrawY = (flagSlideY > 0) ? flagSlideY - by * TILE : y + 4;
+      if (flagDrawY >= 0 && flagDrawY < TILE) {
+        ctx.fillStyle = '#0a0';
+        ctx.fillRect(x + TILE / 2 + 3, flagDrawY, 16, 12);
+      }
       break;
   }
 }
@@ -945,15 +965,23 @@ function setupTouchControls() {
   function resizeCanvas() {
     const ratio = W / H;
     let sw = window.innerWidth, sh = window.innerHeight;
-    // Reserve space for controls at bottom
-    let controlH = 120;
-    let availH = sh - controlH;
-    if (sw / availH > ratio) {
-      canvas.style.height = availH + 'px';
-      canvas.style.width = (availH * ratio) + 'px';
-    } else {
+    let isLandscape = sw > sh;
+
+    if (isLandscape) {
+      // Landscape: fill entire screen, overlay controls
       canvas.style.width = sw + 'px';
-      canvas.style.height = (sw / ratio) + 'px';
+      canvas.style.height = sh + 'px';
+    } else {
+      // Portrait: reserve space for controls at bottom
+      let controlH = 120;
+      let availH = sh - controlH;
+      if (sw / availH > ratio) {
+        canvas.style.height = availH + 'px';
+        canvas.style.width = (availH * ratio) + 'px';
+      } else {
+        canvas.style.width = sw + 'px';
+        canvas.style.height = (sw / ratio) + 'px';
+      }
     }
   }
   resizeCanvas();
@@ -961,7 +989,7 @@ function setupTouchControls() {
 
   // Create touch button UI
   const btnContainer = document.createElement('div');
-  btnContainer.style.cssText = 'position:fixed;bottom:0;left:0;right:0;height:120px;display:flex;justify-content:space-between;align-items:center;padding:0 16px;z-index:999;';
+  btnContainer.style.cssText = 'position:fixed;bottom:0;left:0;right:0;height:100px;display:flex;justify-content:space-between;align-items:center;padding:0 16px;z-index:999;background:linear-gradient(transparent,rgba(0,0,0,0.4));';
 
   // Left side: D-pad
   const dpad = document.createElement('div');
@@ -970,12 +998,12 @@ function setupTouchControls() {
   function makeBtn(text, w) {
     const b = document.createElement('button');
     b.textContent = text;
-    b.style.cssText = `width:${w}px;height:80px;font-size:28px;border:none;border-radius:16px;background:rgba(255,255,255,0.2);color:#fff;touch-action:none;-webkit-user-select:none;user-select:none;display:flex;align-items:center;justify-content:center;`;
+    b.style.cssText = `width:${w}px;height:64px;font-size:24px;border:none;border-radius:14px;background:rgba(255,255,255,0.25);color:#fff;touch-action:none;-webkit-user-select:none;user-select:none;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px);`;
     return b;
   }
 
-  const btnLeft = makeBtn('◀', 80);
-  const btnRight = makeBtn('▶', 80);
+  const btnLeft = makeBtn('◀', 70);
+  const btnRight = makeBtn('▶', 70);
 
   // Right side: Jump
   const jumpArea = document.createElement('div');

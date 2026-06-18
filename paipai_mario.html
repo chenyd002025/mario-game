@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Super Mario - Optimized</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; }
+canvas { display: block; image-rendering: pixelated; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+canvas.width = 800;
+canvas.height = 480;
+const W = canvas.width, H = canvas.height;
+const TILE = 32;
+
+// ============================================
+// 🎯 优化1: 图片加载系统 - 使用Promise确保加载完成
+// ============================================
+const IMG = {};
+let imgLoaded = 0;
+const IMG_COUNT = 50;
+let imgsReady = false;
+
+function loadImg(name, src) {
+  return new Promise((resolve) => {
+    IMG[name] = new Image();
+    IMG[name].onload = () => { imgLoaded++; if (imgLoaded >= IMG_COUNT) imgsReady = true; resolve(); };
+    IMG[name].onerror = () => { imgLoaded++; if (imgLoaded >= IMG_COUNT) imgsReady = true; resolve(); };
+    IMG[name].src = src;
+  });
+}
+
+// 并行加载所有图片
+Promise.all([
+  loadImg('bg', 'mario_assets/background.png'),
+  loadImg('brick', 'mario_assets/brick_tile.png'),
+  loadImg('qblock', 'mario_assets/question_block.png'),
+  loadImg('pipe', 'mario_assets/pipe_sprite.png'),
+  loadImg('tiles', 'mario_assets/tiles.png'),
+  loadImg('clouds', 'mario_assets/clouds.png'),
+  loadImg('mountain', 'mario_assets/mountain.png'),
+  loadImg('hud', 'mario_assets/hud.png'),
+  loadImg('title', 'mario_assets/title.png'),
+  loadImg('gameover', 'mario_assets/gameover.png'),
+  ...Array.from({length: 4}, (_, i) => loadImg('coin_f' + i, 'mario_assets/coin_frame_' + i + '.png')),
+  ...Array.from({length: 4}, (_, i) => loadImg('m_idle' + i, 'mario_assets/mario_idle_' + i + '.png')),
+  ...Array.from({length: 4}, (_, i) => loadImg('m_run' + i, 'mario_assets/mario_run_' + i + '.png')),
+  ...Array.from({length: 4}, (_, i) => loadImg('m_jump' + i, 'mario_assets/mario_jump_' + i + '.png')),
+  ...Array.from({length: 4}, (_, i) => loadImg('m_duck' + i, 'mario_assets/mario_duck_' + i + '.png')),
+  ...Array.from({length: 4}, (_, i) => loadImg('m_atk' + i, 'mario_assets/mario_attack_' + i + '.png')),
+  ...Array.from({length: 3}, (_, i) => loadImg('g_idle' + i, 'mario_assets/goomba_idle_' + i + '.png')),
+  ...Array.from({length: 2}, (_, i) => loadImg('g_walk' + i, 'mario_assets/goomba_walk_' + i + '.png')),
+  ...Array.from({length: 2}, (_, i) => loadImg('k_walk' + i, 'mario_assets/koopa_walk_' + i + '.png')),
+  ...Array.from({length: 2}, (_, i) => loadImg('k_shell' + i, 'mario_assets/koopa_shell_' + i + '.png')),
+  loadImg('heart_full', 'mario_assets/heart_full.png'),
+  loadImg('heart_empty', 'mario_assets/heart_empty.png'),
+  loadImg('pw_mush', 'mario_assets/pw_mushroom.png'),
+  loadImg('pw_flwr', 'mario_assets/pw_flower.png'),
+  loadImg('pw_star', 'mario_assets/pw_star.png'),
+  loadImg('m_portrait', 'mario_assets/mario_portrait.png'),
+  loadImg('l_portrait', 'mario_assets/luigi_portrait.png'),
+]).then(() => console.log('All images loaded'));
+
+// ============================================
+// 🎯 优化2: 粒子对象池 - 避免GC抖动
+// ============================================
+class ParticlePool {
+  constructor(maxSize = 200) {
+    this.pool = [];
+    this.active = [];
+    this.maxSize = maxSize;
+    // 预分配粒子对象
+    for (let i = 0; i < maxSize; i++) {
+      this.pool.push({ x: 0, y: 0, vx: 0, vy: 0, size: 0, color: '', life: 0, type: '', active: false });
+    }
+  }
+  
+  spawn(x, y, vx, vy, size, color, life, type) {
+    let p = this.pool.pop();
+    if (!p) {
+      // 池满，复用最老的粒子
+      p = this.active.shift();
+    }
+    p.x = x; p.y = y; p.vx = vx; p.vy = vy;
+    p.size = size; p.color = color; p.life = life; p.type = type;
+    p.active = true;
+    this.active.push(p);
+    return p;
+  }
+  
+  update() {
+    for (let i = this.active.length - 1; i >= 0; i--) {
+      let p = this.active[i];
+      p.x += p.vx;
+      p.y += p.vy;
+      if (p.type === 'debris') p.vy += 0.3;
+      p.life--;
+      if (p.life <= 0) {
+        p.active = false;
+        this.active.splice(i, 1);
+        this.pool.push(p);
+      }
+    }
+  }
+  
+  draw(camX) {
+    for (let p of this.active) {
+      if (p.type === 'coin') {
+        if (imgsReady && IMG.coin_f0.complete) {
+          let frames = [IMG.coin_f0, IMG.coin_f1, IMG.coin_f2, IMG.coin_f3];
+          let frame = Math.floor(Date.now() / 100) % 4;
+          ctx.drawImage(frames[frame], p.x - camX - 10, p.y - 10, 20, 20);
+        } else {
+          ctx.fillStyle = '#ff0';
+          ctx.beginPath();
+          ctx.arc(p.x - camX, p.y, 6, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#fa0';
+          ctx.beginPath();
+          ctx.arc(p.x - camX, p.y, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      } else {
+        ctx.fillStyle = p.color;
+        ctx.fillRect(p.x - camX, p.y, p.size, p.size);
+      }
+    }
+  }
+}
+
+const particlePool = new ParticlePool(200);
+
+// ============================================
+// 🎯 优化3: 浮动文字对象池
+// ============================================
+class FloatingTextPool {
+  constructor(maxSize = 50) {
+    this.pool = [];
+    this.active = [];
+    this.maxSize = maxSize;
+    for (let i = 0; i < maxSize; i++) {
+      this.pool.push({ x: 0, y: 0, text: '', timer: 0, vy: 0, active: false });
+    }
+  }
+  
+  spawn(x, y, text, timer, vy) {
+    let f = this.pool.pop();
+    if (!f) f = this.active.shift();
+    f.x = x; f.y = y; f.text = text; f.timer = timer; f.vy = vy;
+    f.active = true;
+    this.active.push(f);
+  }
+  
+  update() {
+    for (let i = this.active.length - 1; i >= 0; i--) {
+      let f = this.active[i];
+      f.y += f.vy;
+      f.timer--;
+      if (f.timer <= 0) {
+        f.active = false;
+        this.active.splice(i, 1);
+        this.pool.push(f);
+      }
+    }
+  }
+  
+  draw(camX) {
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    for (let f of this.active) {
+      ctx.fillText(f.text, f.x - camX, f.y);
+    }
+  }
+}
+
+const floatingTextPool = new FloatingTextPool(50);
+
+let titleScreen = true;
+let coinAnimFrame = 0;
+let coinAnimTimer = 0;
+let marioAnimFrame = 0;
+let marioAnimTimer = 0;
+const GRAVITY = 0.55;
+const JUMP_FORCE = -10;
+const MOVE_SPEED = 3.5;
+const FRICTION = 0.85;
+
+let camX = 0, coins = 0, score = 0, lives = 3;
+let gameOver = false, won = false, levelComplete = false, levelTimer = 300;
+let keys = {};
+let animFrame = 0;
+
+const MAP_W = 210, MAP_H = 15;
+const GROUND_Y = MAP_H - 2;
+
+const COL = {
+  AIR: 0, GROUND: 1, BRICK: 2, QUESTION: 3, HARD: 4,
+  PIPE_TL: 5, PIPE_TR: 6, PIPE_BL: 7, PIPE_BR: 8,
+  USED: 9, COIN_BLOCK: 10, FLAG_POLE: 11, FLAG_TOP: 12
+};
+
+let grid = [];
+let entities = [];
+let player;
+
+// ============================================
+// 🎯 优化4: 碰撞检测 - 子步进防止穿墙
+// ============================================
+const MAX_VELOCITY = 8; // 限制最大速度
+const SUBSTEPS = 2; // 子步进次数
+
+function clampVelocity(vx, vy) {
+  return {
+    x: Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, vx)),
+    y: Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, vy))
+  };
+}
+
+function initGrid() {
+  grid = [];
+  for (let y = 0; y < MAP_H; y++) {
+    grid[y] = [];
+    for (let x = 0; x < MAP_W; x++) {
+      if (y >= GROUND_Y) grid[y][x] = COL.GROUND;
+      else grid[y][x] = COL.AIR;
+    }
+  }
+
+  // gaps
+  for (let x = 69; x < 72; x++) for (let y = GROUND_Y; y < MAP_H; y++) grid[y][x] = COL.AIR;
+  for (let x = 115; x < 119; x++) for (let y = GROUND_Y; y < MAP_H; y++) grid[y][x] = COL.AIR;
+  for (let x = 155; x < 158; x++) for (let y = GROUND_Y; y < MAP_H; y++) grid[y][x] = COL.AIR;
+
+  function placeBlock(bx, by, type) { if (by >= 0 && by < MAP_H && bx >= 0 && bx < MAP_W) grid[by][bx] = type; }
+
+  // section 1
+  placeBlock(23, 5, COL.QUESTION);
+
+  // pipes
+  placePipe(28, GROUND_Y - 2, 2);
+  placePipe(38, GROUND_Y - 2, 2);
+  placePipe(46, GROUND_Y - 3, 3);
+  placePipe(57, GROUND_Y - 3, 3);
+
+  // section 2
+  for (let x = 80; x <= 87; x++) placeBlock(x, 5, COL.BRICK);
+  for (let x = 91; x <= 93; x++) placeBlock(x, 5, COL.BRICK);
+  placeBlock(94, 5, COL.QUESTION);
+
+  placePipe(105, GROUND_Y - 2, 2);
+  placePipe(112, GROUND_Y - 2, 2);
+
+  // section 3
+  placeBlock(130, 5, COL.BRICK); placeBlock(131, 5, COL.BRICK);
+  placeBlock(132, 5, COL.QUESTION); placeBlock(133, 5, COL.BRICK);
+
+  placePipe(140, GROUND_Y - 2, 2);
+  placePipe(148, GROUND_Y - 2, 2);
+
+  // section 4
+  placeBlock(160, 5, COL.BRICK);
+  placeBlock(161, 5, COL.QUESTION); placeBlock(162, 5, COL.BRICK);
+
+  // flag
+  placeBlock(185, GROUND_Y - 1, COL.FLAG_POLE);
+  for (let y = 3; y < GROUND_Y - 1; y++) placeBlock(185, y, COL.FLAG_POLE);
+  placeBlock(185, 2, COL.FLAG_TOP);
+}
+
+function placePipe(px, py, height) {
+  grid[py][px] = COL.PIPE_TL; grid[py][px + 1] = COL.PIPE_TR;
+  for (let y = py + 1; y < py + height; y++) {
+    if (y < MAP_H) { grid[y][px] = COL.PIPE_BL; grid[y][px + 1] = COL.PIPE_BR; }
+  }
+}
+
+function initEntities() {
+  entities = [];
+
+  function addGoomba(ex) { entities.push({ type: 'goomba', x: ex * TILE, y: (GROUND_Y - 1) * TILE, vx: -1, vy: 0, w: 28, h: 28, alive: true, stomped: 0, frame: 0 }); }
+  function addKoopa(ex) { entities.push({ type: 'koopa', x: ex * TILE, y: (GROUND_Y - 1) * TILE - 8, vx: -1, vy: 0, w: 28, h: 36, alive: true, stomped: 0, frame: 0 }); }
+
+  addGoomba(22); addGoomba(24); addGoomba(40); addGoomba(42);
+  addGoomba(55); addGoomba(78); addGoomba(82); addGoomba(86);
+  addKoopa(60); addGoomba(97); addGoomba(100);
+  addGoomba(128); addGoomba(132); addKoopa(145);
+  addGoomba(160); addGoomba(165); addGoomba(175);
+}
+
+function initPlayer() {
+  player = {
+    x: 3 * TILE, y: (GROUND_Y - 1) * TILE - 32,
+    vx: 0, vy: 0, w: 24, h: 30,
+    onGround: false, big: false, invincible: 0,
+    facing: 1, walkFrame: 0, walkTimer: 0, dead: false, deadTimer: 0
+  };
+}
+
+function resetLevel() {
+  initGrid();
+  initEntities();
+  initPlayer();
+  camX = 0; coins = 0; score = 0;
+  levelComplete = false; gameOver = false; won = false;
+  levelTimer = 300;
+  // 清空对象池
+  particlePool.active = [];
+  particlePool.pool = [];
+  for (let i = 0; i < 200; i++) {
+    particlePool.pool.push({ x: 0, y: 0, vx: 0, vy: 0, size: 0, color: '', life: 0, type: '', active: false });
+  }
+  floatingTextPool.active = [];
+  floatingTextPool.pool = [];
+  for (let i = 0; i < 50; i++) {
+    floatingTextPool.pool.push({ x: 0, y: 0, text: '', timer: 0, vy: 0, active: false });
+  }
+}
+
+function init() { lives = 3; resetLevel(); }
+
+function getBlock(x, y) {
+  if (x < 0 || x >= MAP_W || y < 0 || y >= MAP_H) return COL.AIR;
+  return grid[y][x];
+}
+
+function setBlock(x, y, v) {
+  if (x >= 0 && x < MAP_W && y >= 0 && y < MAP_H) grid[y][x] = v;
+}
+
+function isSolid(b) {
+  return b === COL.GROUND || b === COL.BRICK || b === COL.QUESTION || b === COL.HARD || 
+         b === COL.PIPE_TL || b === COL.PIPE_TR || b === COL.PIPE_BL || b === COL.PIPE_BR;
+}
+
+function hitBlock(bx, by) {
+  let b = getBlock(bx, by);
+  if (b === COL.QUESTION || b === COL.COIN_BLOCK) {
+    setBlock(bx, by, COL.USED);
+    coins++; score += 200;
+    floatingTextPool.spawn(bx * TILE + 8, by * TILE - 10, '200', 40, -1.5);
+    particlePool.spawn(bx * TILE + TILE / 2, by * TILE, 0, -6, 10, '#ff0', 30, 'coin');
+    if (coins % 10 === 0) { 
+      lives++; 
+      floatingTextPool.spawn(bx * TILE, by * TILE - 30, '1UP', 60, -1); 
+    }
+  } else if (b === COL.BRICK) {
+    setBlock(bx, by, COL.AIR);
+    score += 50;
+    for (let i = 0; i < 4; i++) {
+      particlePool.spawn(
+        bx * TILE + (i % 2) * 16, 
+        by * TILE + Math.floor(i / 2) * 16,
+        (i % 2 === 0 ? -2 : 2) + Math.random(), 
+        -4 - Math.random() * 3, 
+        8, '#c84', 50, 'debris'
+      );
+    }
+  }
+}
+
+function rectOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ============================================
+// 🎯 优化5: 碰撞检测 - 完全重写，分离X/Y轴处理
+// ============================================
+function resolveCollisionX() {
+  let left = Math.floor((player.x - player.w / 2) / TILE);
+  let right = Math.floor((player.x + player.w / 2) / TILE);
+  let top = Math.floor(player.y / TILE);
+  let bot = Math.floor((player.y + player.h - 1) / TILE);
+
+  // 只在玩家移动方向检测碰撞
+  if (player.vx > 0) {
+    // 向右移动，只检测右侧
+    for (let ty = top; ty <= bot; ty++) {
+      let b = getBlock(right, ty);
+      if (isSolid(b)) {
+        player.x = right * TILE - player.w / 2 - 0.01; // 微小偏移防止卡住
+        player.vx = 0;
+        return;
+      }
+    }
+  } else if (player.vx < 0) {
+    // 向左移动，只检测左侧
+    for (let ty = top; ty <= bot; ty++) {
+      let b = getBlock(left, ty);
+      if (isSolid(b)) {
+        player.x = (left + 1) * TILE + player.w / 2 + 0.01;
+        player.vx = 0;
+        return;
+      }
+    }
+  }
+}
+
+function resolveCollisionY() {
+  let left = Math.floor((player.x - player.w / 2 + 2) / TILE);
+  let right = Math.floor((player.x + player.w / 2 - 2) / TILE);
+  let top = Math.floor(player.y / TILE);
+  let bot = Math.floor((player.y + player.h) / TILE);
+  player.onGround = false;
+
+  if (player.vy > 0) {
+    // 下落，检测脚下
+    for (let tx = left; tx <= right; tx++) {
+      let b = getBlock(tx, bot);
+      if (isSolid(b)) {
+        player.y = bot * TILE - player.h;
+        player.vy = 0;
+        player.onGround = true;
+        return;
+      }
+    }
+  } else if (player.vy < 0) {
+    // 上升，检测头顶
+    for (let tx = left; tx <= right; tx++) {
+      let b = getBlock(tx, top);
+      if (isSolid(b)) {
+        player.y = (top + 1) * TILE;
+        player.vy = 1;
+        hitBlock(tx, top);
+        return;
+      }
+    }
+  }
+}
+
+function update() {
+  if (gameOver || won) return;
+
+  animFrame++;
+  levelTimer -= 1 / 60;
+  if (levelTimer <= 0) { killPlayer(); return; }
+
+  // Fall death
+  if (player.y > H + 50) {
+    lives--;
+    if (lives <= 0) { gameOver = true; return; }
+    initPlayer(); camX = 0;
+    return;
+  }
+
+  if (player.dead) {
+    player.deadTimer--;
+    if (player.deadTimer > 20) player.vy = -6;
+    else player.vy += GRAVITY;
+    player.y += player.vy;
+    if (player.deadTimer <= 0) {
+      lives--;
+      if (lives <= 0) { gameOver = true; return; }
+      initPlayer(); camX = 0;
+    }
+    return;
+  }
+
+  if (levelComplete) {
+    player.vy += GRAVITY;
+    player.y += player.vy;
+    if (player.y >= (GROUND_Y - 1) * TILE - player.h) { 
+      player.y = (GROUND_Y - 1) * TILE - player.h; 
+      player.vy = 0; 
+      player.onGround = true; 
+    }
+    return;
+  }
+
+  // Input handling
+  if (keys['ArrowLeft'] || keys['a']) { player.vx -= 0.4; player.facing = -1; }
+  if (keys['ArrowRight'] || keys['d']) { player.vx += 0.4; player.facing = 1; }
+
+  if ((keys['ArrowUp'] || keys['w'] || keys[' ']) && player.onGround) {
+    player.vy = JUMP_FORCE - (Math.abs(player.vx) > 2 ? 1.5 : 0);
+    player.onGround = false;
+  }
+
+  if (!(keys['ArrowLeft'] || keys['a'] || keys['ArrowRight'] || keys['d'])) {
+    player.vx *= FRICTION;
+  }
+  
+  // 🎯 优化: 限制速度防止穿墙
+  let vel = clampVelocity(player.vx, player.vy);
+  player.vx = vel.x;
+  player.vy = vel.y;
+  
+  player.vx = Math.max(-MOVE_SPEED, Math.min(MOVE_SPEED, player.vx));
+  if (Math.abs(player.vx) < 0.1) player.vx = 0;
+
+  if (player.invincible > 0) player.invincible--;
+
+  player.vy += GRAVITY;
+  if (player.vy > 10) player.vy = 10;
+
+  // 🎯 优化: 子步进碰撞检测
+  let stepVx = player.vx / SUBSTEPS;
+  let stepVy = player.vy / SUBSTEPS;
+  
+  for (let step = 0; step < SUBSTEPS; step++) {
+    player.x += stepVx;
+    resolveCollisionX();
+    player.y += stepVy;
+    resolveCollisionY();
+  }
+
+  player.x = Math.max(0, player.x);
+  if (player.x < camX + 10) player.x = camX + 10;
+
+  // Walk animation
+  if (player.onGround && Math.abs(player.vx) > 0.5) {
+    player.walkTimer++;
+    if (player.walkTimer > 6) { player.walkTimer = 0; player.walkFrame = (player.walkFrame + 1) % 3; }
+  } else { player.walkFrame = 0; player.walkTimer = 0; }
+
+  // Camera
+  let targetCam = player.x - W / 3;
+  if (targetCam > camX) camX += (targetCam - camX) * 0.1;
+  camX = Math.max(0, Math.min(MAP_W * TILE - W, camX));
+
+  // Entity updates
+  for (let e of entities) {
+    if (!e.alive) continue;
+    if (e.stomped > 0) { e.stomped--; continue; }
+    e.vy += GRAVITY;
+    e.x += e.vx;
+    e.y += e.vy;
+    e.frame++;
+
+    let tx = Math.floor((e.x + e.w / 2) / TILE);
+    let ty = Math.floor((e.y + e.h) / TILE);
+    if (ty >= 0 && ty < MAP_H && tx >= 0 && tx < MAP_W && grid[ty][tx] !== COL.AIR && e.vy >= 0) {
+      e.y = ty * TILE - e.h;
+      e.vy = 0;
+    }
+
+    if (e.x < -50 || e.x > MAP_W * TILE + 50) e.alive = false;
+
+    if (e.alive && e.stomped === 0) {
+      let pBox = { x: player.x - player.w / 2, y: player.y, w: player.w, h: player.h };
+      let eBox = { x: e.x, y: e.y, w: e.w, h: e.h };
+      if (rectOverlap(pBox, eBox)) {
+        if (player.vy > 0 && player.y + player.h - 8 < e.y + e.h / 2) {
+          e.stomped = 20;
+          e.h = 14;
+          player.vy = -7;
+          score += 100;
+          floatingTextPool.spawn(e.x, e.y - 10, '100', 30, -1.5);
+        } else if (player.invincible === 0) {
+          killPlayer();
+        }
+      }
+    }
+  }
+  entities = entities.filter(e => e.alive || e.stomped > 0);
+
+  // Update pools
+  particlePool.update();
+  floatingTextPool.update();
+
+  // Flag collision
+  let flagTileX = 185;
+  let playerTileX = Math.floor(player.x / TILE);
+  if (playerTileX >= flagTileX - 2) {
+    if (!levelComplete && !won) {
+      levelComplete = true;
+      won = true;
+      score += Math.floor(levelTimer) * 50;
+    }
+  }
+}
+
+function killPlayer() {
+  if (player.invincible > 0 || player.dead) return;
+  player.dead = true;
+  player.deadTimer = 60;
+  if (player.y > H) {
+    player.vy = 0;
+  } else {
+    player.vy = -8;
+  }
+  player.vx = 0;
+}
+
+// ============================================
+// 🎯 优化6: 视锥裁剪 - 只渲染可见区域
+// ============================================
+function drawTile(bx, by, type) {
+  let x = bx * TILE - camX, y = by * TILE;
+  // 严格视锥裁剪
+  if (x < -TILE || x > W) return;
+
+  switch (type) {
+    case COL.GROUND:
+    case COL.BRICK:
+      if (imgsReady && IMG.brick.complete) {
+        ctx.drawImage(IMG.brick, x, y, TILE, TILE);
+      } else {
+        ctx.fillStyle = '#c84';
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.strokeStyle = '#852';
+        ctx.strokeRect(x + 0.5, y + 0.5, TILE - 1, TILE - 1);
+      }
+      break;
+    case COL.QUESTION:
+      if (imgsReady && IMG.qblock.complete) {
+        ctx.drawImage(IMG.qblock, x, y, TILE, TILE);
+      } else {
+        ctx.fillStyle = '#fa0';
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.fillStyle = '#c80';
+        ctx.fillRect(x + 1, y + 1, TILE - 2, TILE - 2);
+        ctx.fillStyle = '#fe0';
+        ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+        ctx.fillStyle = '#850';
+        ctx.font = 'bold 18px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('?', x + TILE / 2, y + TILE / 2 + 6);
+      }
+      break;
+    case COL.USED:
+      ctx.fillStyle = '#886';
+      ctx.fillRect(x, y, TILE, TILE);
+      ctx.fillStyle = '#664';
+      ctx.fillRect(x + 2, y + 2, TILE - 4, TILE - 4);
+      break;
+    case COL.HARD:
+      ctx.fillStyle = '#888';
+      ctx.fillRect(x, y, TILE, TILE);
+      ctx.fillStyle = '#666';
+      ctx.fillRect(x + 1, y + 1, TILE - 2, TILE - 2);
+      break;
+    case COL.PIPE_TL:
+    case COL.PIPE_TR:
+    case COL.PIPE_BL:
+    case COL.PIPE_BR:
+      if (imgsReady && IMG.pipe.complete) {
+        ctx.drawImage(IMG.pipe, x, y, TILE, TILE);
+      } else {
+        ctx.fillStyle = '#0a0';
+        ctx.fillRect(x, y, TILE, TILE);
+        ctx.fillStyle = '#0d0';
+        ctx.fillRect(x, y, 4, TILE);
+        ctx.fillStyle = '#080';
+        ctx.fillRect(x + TILE - 2, y, 4, TILE);
+      }
+      break;
+    case COL.FLAG_POLE:
+      ctx.fillStyle = '#0a0';
+      ctx.fillRect(x + TILE / 2 - 2, y, 4, TILE);
+      break;
+    case COL.FLAG_TOP:
+      ctx.fillStyle = '#888';
+      ctx.fillRect(x + TILE / 2 - 3, y, 6, TILE);
+      ctx.fillStyle = '#0a0';
+      ctx.fillRect(x + TILE / 2 + 3, y + 4, 16, 12);
+      break;
+  }
+}
+
+function drawPlayer() {
+  let px = player.x - camX, py = player.y;
+  let f = player.facing;
+  if (player.dead) {
+    if (imgsReady && IMG.m_duck0.complete) {
+      ctx.save();
+      ctx.translate(px, py + player.h / 2);
+      ctx.drawImage(IMG.m_duck0, -player.w, -player.h, player.w * 2, player.h * 2);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#f44';
+      ctx.fillRect(px - 10, py, 20, player.h);
+    }
+    return;
+  }
+  if (player.invincible > 0 && animFrame % 4 < 2) return;
+
+  if (imgsReady && IMG.m_idle0.complete) {
+    marioAnimTimer++;
+    if (marioAnimTimer > 5) { marioAnimTimer = 0; marioAnimFrame = (marioAnimFrame + 1) % 4; }
+
+    let sprite;
+    if (!player.onGround) {
+      sprite = IMG['m_jump' + (marioAnimFrame % 4)];
+    } else if (Math.abs(player.vx) > 0.5) {
+      sprite = IMG['m_run' + marioAnimFrame];
+    } else {
+      sprite = IMG['m_idle' + marioAnimFrame];
+    }
+
+    if (sprite && sprite.complete) {
+      ctx.save();
+      ctx.translate(px, py + player.h / 2);
+      if (f < 0) ctx.scale(-1, 1);
+      ctx.drawImage(sprite, -player.w, -player.h, player.w * 2, player.h * 2);
+      ctx.restore();
+    }
+  } else {
+    ctx.save();
+    ctx.translate(px, py);
+    if (f < 0) ctx.scale(-1, 1);
+    ctx.fillStyle = '#f00';
+    ctx.fillRect(-10, 0, 20, 14);
+    ctx.fillStyle = '#f80';
+    ctx.fillRect(-10, 14, 20, 16);
+    ctx.restore();
+  }
+}
+
+function drawEntity(e) {
+  let x = e.x - camX, y = e.y;
+  if (x < -50 || x > W + 50) return;
+
+  if (e.type === 'goomba') {
+    if (e.stomped > 0) {
+      if (imgsReady && IMG.g_idle0 && IMG.g_idle0.complete) {
+        ctx.drawImage(IMG.g_idle0, x - 2, y + e.h - 14, e.w + 4, 16);
+      } else {
+        ctx.fillStyle = '#a62';
+        ctx.fillRect(x, y + e.h - 6, e.w, 6);
+      }
+      return;
+    }
+    if (imgsReady && IMG.g_walk0 && IMG.g_walk0.complete) {
+      let walk = Math.floor(e.frame / 10) % 2;
+      let sprite = walk ? IMG.g_walk1 : IMG.g_walk0;
+      if (sprite && sprite.complete) {
+        ctx.drawImage(sprite, x, y, e.w, e.h);
+      }
+    } else {
+      ctx.fillStyle = '#a62';
+      ctx.beginPath();
+      ctx.ellipse(x + e.w / 2, y + e.h / 2, e.w / 2, e.h / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (e.type === 'koopa') {
+    if (e.stomped > 0) {
+      if (imgsReady && IMG.k_shell0 && IMG.k_shell0.complete) {
+        ctx.drawImage(IMG.k_shell0, x, y + e.h - 16, e.w, 16);
+      } else {
+        ctx.fillStyle = '#0a0';
+        ctx.beginPath();
+        ctx.ellipse(x + e.w / 2, y + e.h - 7, e.w / 2, 7, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    }
+    if (imgsReady && IMG.k_walk0 && IMG.k_walk0.complete) {
+      let walk = Math.floor(e.frame / 12) % 2;
+      let sprite = walk ? IMG.k_walk1 : IMG.k_walk0;
+      if (sprite && sprite.complete) {
+        ctx.drawImage(sprite, x - 2, y - 2, e.w + 4, e.h + 4);
+      }
+    } else {
+      ctx.fillStyle = '#0a0';
+      ctx.beginPath();
+      ctx.ellipse(x + e.w / 2, y + 12, 12, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+}
+
+function draw() {
+  if (titleScreen) { drawTitle(); return; }
+
+  // Background
+  if (imgsReady && IMG.bg && IMG.bg.complete) {
+    let bgW = IMG.bg.width;
+    let bgX = -(camX * 0.3) % bgW;
+    if (bgX > 0) bgX -= bgW;
+    ctx.drawImage(IMG.bg, bgX, 0, bgW, H);
+    ctx.drawImage(IMG.bg, bgX + bgW, 0, bgW, H);
+  } else {
+    ctx.fillStyle = '#5C94FC';
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Clouds
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  for (let i = 0; i < 10; i++) {
+    let cx = (i * 350 + 80) - camX * 0.3;
+    let cy = 40 + (i % 3) * 35;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 40, 18, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx - 25, cy + 8, 25, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx + 25, cy + 5, 30, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Mountains
+  ctx.fillStyle = '#2a8c2a';
+  for (let i = 0; i < 8; i++) {
+    let mx = i * 500 - camX * 0.5;
+    let my = GROUND_Y * TILE;
+    ctx.beginPath();
+    ctx.ellipse(mx, my, 120, 60, 0, Math.PI, 0);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#3a9c3a';
+  for (let i = 0; i < 8; i++) {
+    let mx = i * 500 - camX * 0.5;
+    let my = GROUND_Y * TILE;
+    ctx.beginPath();
+    ctx.ellipse(mx, my, 90, 45, 0, Math.PI, 0);
+    ctx.fill();
+  }
+
+  // 🎯 优化: 只渲染视口内的tiles
+  let startTileX = Math.floor(camX / TILE);
+  let endTileX = Math.ceil((camX + W) / TILE);
+  for (let y = 0; y < MAP_H; y++) {
+    for (let x = startTileX; x < endTileX && x < MAP_W; x++) {
+      if (grid[y][x] !== COL.AIR) drawTile(x, y, grid[y][x]);
+    }
+  }
+
+  for (let e of entities) drawEntity(e);
+  drawPlayer();
+
+  // 使用对象池绘制粒子和文字
+  particlePool.draw(camX);
+  floatingTextPool.draw(camX);
+
+  // HUD
+  ctx.fillStyle = '#1a1a2e';
+  ctx.fillRect(0, 0, W, 55);
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, 55);
+  ctx.lineTo(W, 55);
+  ctx.stroke();
+
+  ctx.font = 'bold 14px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('MARIO', 20, 18);
+  ctx.fillStyle = '#aaa';
+  ctx.fillText(String(score).padStart(6, '0'), 20, 36);
+
+  // Hearts
+  if (imgsReady && IMG.heart_full && IMG.heart_full.complete) {
+    for (let i = 0; i < 3; i++) {
+      let hx = 20 + i * 22;
+      if (i < lives) ctx.drawImage(IMG.heart_full, hx, 40, 14, 14);
+      else ctx.drawImage(IMG.heart_empty, hx, 40, 14, 14);
+    }
+  } else {
+    ctx.fillStyle = '#f44';
+    ctx.fillText('♥ x' + lives, 20, 50);
+  }
+
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.fillText('WORLD 1-1', W / 2, 18);
+
+  // Coin icon
+  ctx.fillStyle = '#FFD700';
+  ctx.beginPath();
+  ctx.arc(W / 2 - 42, 32, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#DAA520';
+  ctx.beginPath();
+  ctx.arc(W / 2 - 42, 32, 3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.fillText('x' + String(coins).padStart(3, '0'), W / 2 + 5, 38);
+
+  ctx.textAlign = 'right';
+  ctx.fillText('TIME', W - 20, 18);
+  ctx.fillText(String(Math.max(0, Math.floor(levelTimer))), W - 20, 36);
+
+  if (gameOver) {
+    ctx.fillStyle = 'rgba(0,0,0,0.75)';
+    ctx.fillRect(0, 0, W, H);
+    if (imgsReady && IMG.gameover.complete) {
+      ctx.drawImage(IMG.gameover, W / 2 - 150, H / 2 - 85, 300, 170);
+    } else {
+      ctx.font = 'bold 40px monospace';
+      ctx.fillStyle = '#f44';
+      ctx.textAlign = 'center';
+      ctx.fillText('GAME OVER', W / 2, H / 2 - 10);
+    }
+    ctx.font = '18px monospace';
+    ctx.fillStyle = '#aaa';
+    ctx.textAlign = 'center';
+    ctx.fillText('Score: ' + score + '  按 R 重新开始', W / 2, H / 2 + 100);
+  }
+
+  if (won) {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillRect(0, 0, W, H);
+    ctx.font = 'bold 36px monospace';
+    ctx.fillStyle = '#ff0';
+    ctx.textAlign = 'center';
+    ctx.fillText('COURSE CLEAR!', W / 2, H / 2 - 20);
+    ctx.font = '20px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.fillText('Score: ' + score, W / 2, H / 2 + 15);
+    ctx.font = '16px monospace';
+    ctx.fillStyle = '#aaa';
+    ctx.fillText('按 R 重新开始', W / 2, H / 2 + 45);
+  }
+}
+
+document.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (titleScreen) {
+    if (e.key === 'Enter' || e.key === ' ') {
+      titleScreen = false;
+      init();
+    }
+  } else if (gameOver || won) {
+    if (e.key === 'r' || e.key === 'R') { lives = 3; resetLevel(); }
+  }
+  e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+// ============================================
+// 🎯 优化7: 帧率控制 - 使用requestAnimationFrame
+// ============================================
+function loop() {
+  try {
+    update();
+    draw();
+  } catch(err) {
+    ctx.fillStyle = '#f00';
+    ctx.font = '14px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('ERROR: ' + err.message, 10, H - 10);
+    console.error(err);
+  }
+  requestAnimationFrame(loop);
+}
+
+function drawTitle() {
+  let grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, '#5C94FC');
+  grad.addColorStop(0.6, '#87CEEB');
+  grad.addColorStop(1, '#56A64A');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  // Hills
+  ctx.fillStyle = '#2D8B2D';
+  for (let i = 0; i < 6; i++) {
+    let hx = i * 180 - 50;
+    ctx.beginPath();
+    ctx.ellipse(hx, H - 30, 120, 65, 0, Math.PI, 0);
+    ctx.fill();
+  }
+  ctx.fillStyle = '#3DAB3D';
+  for (let i = 0; i < 6; i++) {
+    let hx = i * 180 - 50;
+    ctx.beginPath();
+    ctx.ellipse(hx, H - 30, 85, 45, 0, Math.PI, 0);
+    ctx.fill();
+  }
+
+  // Ground
+  ctx.fillStyle = '#C84C09';
+  ctx.fillRect(0, H - 40, W, 40);
+  ctx.fillStyle = '#E09050';
+  ctx.fillRect(0, H - 40, W, 6);
+
+  // Clouds
+  ctx.fillStyle = 'rgba(255,255,255,0.85)';
+  for (let i = 0; i < 8; i++) {
+    let cx = 60 + i * 110;
+    let cy = 40 + (i % 3) * 30;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 38, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx - 22, cy + 7, 24, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx + 24, cy + 4, 28, 14, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Title
+  ctx.save();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.font = 'bold 52px "Press Start 2P", monospace';
+  ctx.fillStyle = '#000';
+  ctx.fillText("MARIO'S", W / 2 + 3, 103);
+  ctx.fillText("ADVENTURE", W / 2 + 3, 163);
+
+  ctx.fillStyle = '#E4211A';
+  ctx.fillText("MARIO'S", W / 2, 100);
+  ctx.fillStyle = '#F5C518';
+  ctx.fillText("ADVENTURE", W / 2, 160);
+
+  ctx.strokeStyle = '#000';
+  ctx.lineWidth = 2;
+  ctx.strokeText("MARIO'S", W / 2, 100);
+  ctx.strokeText("ADVENTURE", W / 2, 160);
+  ctx.restore();
+
+  // Mario sprite
+  if (imgsReady && IMG.m_portrait && IMG.m_portrait.complete) {
+    let bounce = Math.sin(Date.now() / 300) * 12;
+    ctx.drawImage(IMG.m_portrait, W / 2 - 30, 200 + bounce, 60, 60);
+  }
+
+  // Coins
+  ctx.fillStyle = '#FFD700';
+  ctx.beginPath();
+  ctx.arc(W / 2 + 55, 220, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#DAA520';
+  ctx.beginPath();
+  ctx.arc(W / 2 + 55, 220, 4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#FFD700';
+  ctx.beginPath();
+  ctx.arc(W / 2 - 55, 220, 8, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#DAA520';
+  ctx.beginPath();
+  ctx.arc(W / 2 - 55, 220, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Start prompt
+  let alpha = 0.5 + 0.5 * Math.sin(Date.now() / 400);
+  ctx.globalAlpha = alpha;
+  ctx.font = 'bold 20px monospace';
+  ctx.fillStyle = '#fff';
+  ctx.textAlign = 'center';
+  ctx.fillText('PRESS SPACE TO START', W / 2, H - 80);
+  ctx.globalAlpha = 1;
+}
+
+init();
+loop();
+</script>
+</body>
+</html>

@@ -1334,14 +1334,18 @@ if (isMobile) {
       const barLeft = canvasRect.left;
       const barRight = window.innerWidth - canvasRect.right;
 
-      oDpad.style.left = Math.max(8, barLeft / 2 - 70) + 'px';
-      oDpad.style.bottom = '20px';
+      // D-pad centered in left black bar
+      oDpad.style.position = 'fixed';
+      oDpad.style.left = Math.max(4, (barLeft - 136) / 2) + 'px';
+      oDpad.style.bottom = '30px';
       oDpad.style.right = 'auto';
       oDpad.style.top = 'auto';
 
-      oJump.style.right = Math.max(8, barRight / 2 - 35) + 'px';
-      oJump.style.left = 'auto';
-      oJump.style.bottom = '20px';
+      // Jump button centered in right black bar
+      oJump.style.position = 'fixed';
+      oJump.style.left = (window.innerWidth - barRight + (barRight - 70) / 2) + 'px';
+      oJump.style.right = 'auto';
+      oJump.style.bottom = '30px';
       oJump.style.top = 'auto';
 
       oFS.style.display = 'block';
